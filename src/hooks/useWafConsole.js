@@ -1,26 +1,34 @@
-import { useEffect, useState } from 'react';
-import { randomPublicIp } from '../lib/ip.js';
+import { useEffect, useState } from "react";
+import { randomPublicIp } from "../lib/ip.js";
+import { recommendedMethod } from "../lib/vectors.js";
 
-const STORAGE_KEY = 'waf-test-console-v1';
+const STORAGE_KEY = "waf-test-console-v1";
 const MAX_HISTORY = 50;
 
 const DEFAULT_FORM = {
-  target: 'http://localhost:8000',
-  path: '/',
-  ip: '',
-  method: 'GET',
-  userAgent: '',
-  payload: '',
+    target: "http://localhost:8000",
+    path: "/",
+    ip: "",
+    method: "GET",
+    userAgent: "",
+    payload: "",
+    contentType: "",
+    uploadEnabled: false,
+    uploadField: "file",
+    uploadFilename: "shell.php",
+    uploadType: "application/x-php",
+    uploadContent: '<?php system($_GET["cmd"]); ?>',
 };
 
 function loadStoredForm() {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}') ?? {};
+    try {
+        const stored =
+            JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") ?? {};
 
-    return { ...DEFAULT_FORM, ...stored };
-  } catch {
-    return { ...DEFAULT_FORM };
-  }
+        return { ...DEFAULT_FORM, ...stored };
+    } catch {
+        return { ...DEFAULT_FORM };
+    }
 }
 
 /**
@@ -30,134 +38,205 @@ function loadStoredForm() {
  * logika bisa dipakai ulang / diuji tanpa me-render halaman.
  */
 export function useWafConsole() {
-  const [form, setForm] = useState(loadStoredForm);
-  const [result, setResult] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [tab, setTab] = useState('body');
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState('');
-  const [previewOpen, setPreviewOpen] = useState(false);
+    const [form, setForm] = useState(loadStoredForm);
+    const [result, setResult] = useState(null);
+    const [history, setHistory] = useState([]);
+    const [tab, setTab] = useState("body");
+    const [loading, setLoading] = useState(false);
+    const [progress, setProgress] = useState("");
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const [activeVector, setActiveVector] = useState(null);
 
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(form));
-  }, [form]);
+    useEffect(() => {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(form));
+    }, [form]);
 
-  const update = (patch) => setForm((prev) => ({ ...prev, ...patch }));
+    const update = (patch) => setForm((prev) => ({ ...prev, ...patch }));
 
-  const randomizeIp = () => update({ ip: randomPublicIp() });
+    const randomizeIp = () => update({ ip: randomPublicIp() });
 
-  const send = async (ipOverride) => {
-    const target = form.target.trim();
+    const postProxy = async (payload) => {
+        const response = await fetch("/api/proxy", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
 
-    if (target === '') {
-      setResult({ success: false, message: 'URL target wajib diisi.' });
+        return response.json();
+    };
 
-      return null;
-    }
+    const send = async (ipOverride) => {
+        const target = form.target.trim();
 
-    const ip = (ipOverride ?? form.ip).trim();
-    const path = form.path.trim() || '/';
+        if (target === "") {
+            setResult({ success: false, message: "URL target wajib diisi." });
 
-    setLoading(true);
+            return null;
+        }
 
-    try {
-      const response = await fetch('/api/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          target,
-          path,
-          ip,
-          method: form.method,
-          user_agent: form.userAgent.trim(),
-          payload: form.payload,
-        }),
-      });
+        const ip = (ipOverride ?? form.ip).trim();
+        const path = form.path.trim() || "/";
 
-      const data = await response.json();
-      setResult(data);
+        setLoading(true);
 
-      if (data.success) {
-        update({ ip: data.ip });
-        setTab('body');
-        setHistory((prev) =>
-          [
-            {
-              time: new Date().toLocaleTimeString(),
-              ip: data.ip,
-              path,
-              status: data.status,
-              ms: data.duration_ms,
-            },
-            ...prev,
-          ].slice(0, MAX_HISTORY),
-        );
-      }
+        try {
+            const data = await postProxy({
+                target,
+                path,
+                ip,
+                method: form.method,
+                user_agent: form.userAgent.trim(),
+                payload: form.payload,
+                content_type: form.contentType.trim(),
+                upload: form.uploadEnabled
+                    ? {
+                          field: form.uploadField.trim() || "file",
+                          filename: form.uploadFilename.trim() || "shell.php",
+                          content_type:
+                              form.uploadType.trim() ||
+                              "application/octet-stream",
+                          content: form.uploadContent,
+                      }
+                    : null,
+            });
 
-      return data;
-    } catch (error) {
-      // Kegagalan fetch di level jaringan (dev-server mati / koneksi putus)
-      // dilempar sebagai TypeError, bukan Error biasa.
-      const unreachable = error instanceof TypeError;
+            setResult(data);
 
-      setResult({
-        success: false,
-        message: unreachable
-          ? 'Tidak dapat menghubungi dev-server (/api/proxy). Pastikan "npm run dev" masih berjalan, lalu muat ulang halaman ini.'
-          : `Kesalahan jaringan: ${error.message}`,
-      });
+            if (data.success) {
+                update({ ip: data.ip });
+                setTab("body");
+                setHistory((prev) =>
+                    [
+                        {
+                            time: new Date().toLocaleTimeString(),
+                            ip: data.ip,
+                            path,
+                            status: data.status,
+                            ms: data.duration_ms,
+                        },
+                        ...prev,
+                    ].slice(0, MAX_HISTORY),
+                );
+            }
 
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  };
+            return data;
+        } catch (error) {
+            // Kegagalan fetch di level jaringan (dev-server mati / koneksi putus)
+            // dilempar sebagai TypeError, bukan Error biasa.
+            const unreachable = error instanceof TypeError;
 
-  const sendWithRandomIp = async () => {
-    const ip = randomPublicIp();
-    update({ ip });
-    await send(ip);
-  };
+            setResult({
+                success: false,
+                message: unreachable
+                    ? 'Tidak dapat menghubungi dev-server (/api/proxy). Pastikan "npm run dev" masih berjalan, lalu muat ulang halaman ini.'
+                    : `Kesalahan jaringan: ${error.message}`,
+            });
 
-  const bulkTest = async (count) => {
-    for (let index = 0; index < count; index += 1) {
-      const ip = randomPublicIp();
-      update({ ip });
-      setProgress(`Menguji ${index + 1}/${count} IP acak...`);
+            return null;
+        } finally {
+            setLoading(false);
+        }
+    };
 
-      await send(ip);
-    }
+    /**
+     * Mengirim permintaan arbitrer tanpa menyentuh state `result`/`history`.
+     * Dipakai tab "Pengujian Serangan" supaya serangan tidak mengubah temuan
+     * pada tab pertama.
+     */
+    const sendRaw = async (override = {}) => {
+        const payload = {
+            target: (override.target ?? form.target).trim(),
+            path: (override.path ?? form.path).trim() || "/",
+            ip: (override.ip ?? form.ip ?? "").trim(),
+            method: override.method ?? form.method,
+            user_agent: (override.userAgent ?? form.userAgent ?? "").trim(),
+            payload: override.payload ?? "",
+            content_type: (override.contentType ?? "").trim(),
+            upload: override.upload ?? null,
+        };
 
-    setProgress('');
-  };
+        try {
+            return await postProxy(payload);
+        } catch (error) {
+            return {
+                success: false,
+                message: `Kesalahan jaringan: ${error.message}`,
+            };
+        }
+    };
 
-  const applyVector = (vector) => {
-    update({
-      path: vector.path,
-      method: vector.method ?? 'GET',
-      ...(vector.userAgent !== undefined ? { userAgent: vector.userAgent } : {}),
-      ...(vector.payload !== undefined ? { payload: vector.payload } : {}),
-    });
-  };
+    const sendWithRandomIp = async () => {
+        const ip = randomPublicIp();
+        update({ ip });
+        await send(ip);
+    };
 
-  const clearHistory = () => setHistory([]);
+    const bulkTest = async (count) => {
+        for (let index = 0; index < count; index += 1) {
+            const ip = randomPublicIp();
+            update({ ip });
+            setProgress(`Menguji ${index + 1}/${count} IP acak...`);
 
-  return {
-    form,
-    update,
-    result,
-    history,
-    tab,
-    setTab,
-    loading,
-    progress,
-    previewOpen,
-    setPreviewOpen,
-    send,
-    randomizeIp,
-    sendWithRandomIp,
-    bulkTest,
-    applyVector,
-    clearHistory,
-  };
+            await send(ip);
+        }
+
+        setProgress("");
+    };
+
+    const applyVector = (vector, group) => {
+        const upload = vector.upload;
+        const method = recommendedMethod(vector);
+
+        update({
+            path: vector.path,
+            method,
+            ...(vector.userAgent !== undefined
+                ? { userAgent: vector.userAgent }
+                : {}),
+            ...(vector.payload !== undefined
+                ? { payload: vector.payload }
+                : {}),
+            uploadEnabled: Boolean(upload),
+            ...(upload
+                ? {
+                      uploadField: upload.field ?? form.uploadField,
+                      uploadFilename: upload.filename ?? form.uploadFilename,
+                      uploadType: upload.content_type ?? form.uploadType,
+                      uploadContent: upload.content ?? form.uploadContent,
+                  }
+                : {}),
+        });
+
+        setActiveVector({
+            ...vector,
+            method,
+            group: group ?? vector.group ?? "",
+        });
+    };
+
+    const clearVector = () => setActiveVector(null);
+
+    const clearHistory = () => setHistory([]);
+
+    return {
+        form,
+        update,
+        result,
+        history,
+        tab,
+        setTab,
+        loading,
+        progress,
+        previewOpen,
+        setPreviewOpen,
+        send,
+        sendRaw,
+        activeVector,
+        clearVector,
+        randomizeIp,
+        sendWithRandomIp,
+        bulkTest,
+        applyVector,
+        clearHistory,
+    };
 }
