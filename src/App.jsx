@@ -17,7 +17,7 @@ export default function App() {
         badge="Local only"
       />
 
-      <main className="mx-auto max-w-7xl px-5 py-6">
+      <main className="mx-auto max-w-full px-5 py-6">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
           <div className="flex flex-col gap-6">
             <RequestForm
